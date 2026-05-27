@@ -1,0 +1,11 @@
+LICENSE
+README.md
+pyproject.toml
+src/autosync.py
+src/charm.py
+src/script/lputils.py
+src/ubuntu_autosync_operator.egg-info/PKG-INFO
+src/ubuntu_autosync_operator.egg-info/SOURCES.txt
+src/ubuntu_autosync_operator.egg-info/dependency_links.txt
+src/ubuntu_autosync_operator.egg-info/requires.txt
+src/ubuntu_autosync_operator.egg-info/top_level.txt

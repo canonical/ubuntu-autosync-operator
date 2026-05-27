@@ -1,0 +1,5 @@
+autosync
+charm
+nginx
+script
+systemd

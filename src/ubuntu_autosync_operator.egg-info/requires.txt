@@ -1,0 +1,14 @@
+charmlibs-apt~=1.0
+charmlibs-pathops~=1.0.0
+charmlibs-systemd~=1.0
+ops~=2.17
+pydantic
+
+[dev]
+ops[testing]
+coverage[toml]
+pytest
+requests
+jubilant
+ruff
+urllib3>=2.6.3

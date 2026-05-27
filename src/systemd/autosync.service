@@ -1,0 +1,18 @@
+[Unit]
+Description=Ubuntu Auto Sync - Archive synchronization job
+
+[Service]
+Type=oneshot
+Environment="LP_CREDENTIALS_FILE=/home/ubuntu/.config/lp-ubuntu-archive-autosync-bot.oauth"
+
+User=ubuntu
+KeyringMode=private
+NoNewPrivileges=true
+PrivateTmp=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictSUIDSGID=yes
+
+ExecStart=run-autosync

@@ -1,0 +1,65 @@
+name: ubuntu-autosync
+type: charm
+title: Ubuntu Auto Sync charm
+summary: Run Ubuntu autosync and publish logs
+description: |
+  **Ubuntu Auto Sync Operator** is a [charm](https://juju.is/charms-architecture)
+  that runs the Ubuntu archive autosync job on a schedule and publishes
+  generated logs on a web endpoint.
+
+links:
+  website:
+    - https://charmhub.io/ubuntu-autosync
+  issues:
+    - https://github.com/canonical/ubuntu-autosync-operator/issues
+  source:
+    - https://github.com/canonical/ubuntu-autosync-operator
+
+base: ubuntu@24.04
+platforms:
+  amd64:
+
+parts:
+  ubuntu-autosync-charm:
+    source: .
+    plugin: uv
+    build-packages: [git]
+    build-snaps: [astral-uv]
+    override-build: |
+      craftctl default  # Run the default build steps.
+      git describe --always > $CRAFT_PART_INSTALL/version
+
+charm-libs:
+  - lib: traefik_k8s.ingress
+    version: "2"
+
+actions:
+  sync-now:
+    description: |
+      Trigger an immediate run of the autosync service.
+
+requires:
+  ingress:
+    interface: ingress
+    limit: 1
+    optional: true
+
+config:
+  options:
+    lpuser_secret_id:
+      description: |
+        The secret ID for a vault containing the Launchpad oauth token
+        under key lpoauthkey, to be used for services that need
+        authenticated users.
+      type: secret
+    dry_run:
+      description: |
+        Run autosync in dry-run mode and publish reports without copying packages.
+      type: boolean
+      default: true
+    sync_hours:
+      description: |
+        Comma-separated list of hours (local system time) for scheduled autosync runs.
+        Example: "5,11,17,23".
+      type: string
+      default: "5,11,17,23"
