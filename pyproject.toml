@@ -5,7 +5,7 @@ requires-python = ">=3.10"
 
 dependencies = [
     "charmlibs-apt~=1.0",
-    "charmlibs-pathops~=1.0.0",
+    "charmlibs-pathops~=1.2.1",
     "charmlibs-systemd~=1.0",
     "ops~=3.7",
     "pydantic",
@@ -19,7 +19,7 @@ dev = [
     "requests",
     "jubilant",
     "ruff",
-    "urllib3>=2.6.3",
+    "urllib3>=2.7.0",
 ]
 
 # Testing tools configuration
