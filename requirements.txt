@@ -4,7 +4,7 @@ annotated-types==0.7.0
     # via pydantic
 charmlibs-apt==1.0.0.post0
     # via ubuntu-autosync-operator (pyproject.toml)
-charmlibs-pathops==1.0.1.post0
+charmlibs-pathops==1.2.1
     # via ubuntu-autosync-operator (pyproject.toml)
 charmlibs-systemd==1.0.0
     # via ubuntu-autosync-operator (pyproject.toml)
@@ -12,7 +12,7 @@ importlib-metadata==8.7.0
     # via
     #   opentelemetry-api
     #   ops
-opentelemetry-api==1.38.0
+opentelemetry-api==1.42.1
     # via
     #   charmlibs-apt
     #   ops
@@ -20,9 +20,9 @@ ops==2.23.2
     # via
     #   ubuntu-autosync-operator (pyproject.toml)
     #   charmlibs-pathops
-pydantic==2.12.4
+pydantic==2.13.4
     # via ubuntu-autosync-operator (pyproject.toml)
-pydantic-core==2.41.5
+pydantic-core==2.47.0
     # via pydantic
 pyyaml==6.0.3
     # via ops
