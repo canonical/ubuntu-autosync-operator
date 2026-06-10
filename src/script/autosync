@@ -54,6 +54,7 @@ import lputils
 
 
 CONSUMER_KEY = "autosync"
+AUTOSYNC_BOT_ACCOUNT = "ubuntu-archive-autosync-bot"
 
 
 default_suite = {
@@ -801,6 +802,8 @@ def main():
     owner = options.target.archive.owner
     if (not options.dry_run and
             options.launchpad.me != owner and
+            getattr(options.launchpad.me, "name", None) !=
+            AUTOSYNC_BOT_ACCOUNT and
             options.launchpad.me not in owner.participants):
         print("You are not an archive administrator for %s.  Exiting." %
               options.target.distribution.display_name, file=sys.stderr)
