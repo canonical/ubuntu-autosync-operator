@@ -38,7 +38,7 @@ Machine  State    Address        Inst id        Base          AZ            Mess
 
 On first start up, the charm will install the application and install a systemd timer unit to trigger tracker updates on a regular basis.
 
-Configure the Launchpad OAuth secret:
+Configure the Launchpad OAuth secret (the user needs to have queue admin rights due to the use of the copyPackages() silent option):
 
 ```bash
 juju config ubuntu-autosync lpuser_secret_id=secret:<uuid>
