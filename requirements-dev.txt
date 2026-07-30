@@ -22,7 +22,7 @@ importlib-metadata==9.0.0
     #   ops
 iniconfig==2.3.0
     # via pytest
-jubilant==1.11.0
+jubilant==1.12.0
     # via ubuntu-autosync-operator (pyproject.toml)
 opentelemetry-api==1.44.0
     # via
