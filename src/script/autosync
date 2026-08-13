@@ -31,7 +31,6 @@ from functools import cmp_to_key
 import gzip
 from optparse import OptionParser, Values
 import os
-import re
 import shutil
 import ssl
 import subprocess
@@ -394,25 +393,19 @@ def architectures_allowed(dsc, target):
 
 
 def retry_errors(func):
-    for retry_count in range(7):
+    # Launchpad librarian downloads occasionally fail transiently (502/503
+    # responses, read timeouts, dropped connections, ...).  Retry any of
+    # these a bounded number of times with backoff instead of only the
+    # ones that expose a recognisable HTTP status code, then give up and
+    # let the caller decide whether to skip this package.
+    max_retries = 7
+    for retry_count in range(max_retries):
         try:
             return func()
-        except ssl.SSLError:
-            pass
-        except DownloadError as e:
-            # These are unpleasantly difficult to parse, but we have little
-            # choice since the exception object lacks useful metadata.
-            code = None
-            match = re.match(r".*?: (.*?) ", str(e))
-            if match is not None:
-                try:
-                    code = int(match.group(1))
-                except ValueError:
-                    pass
-            if code in (502, 503):
-                time.sleep(int(2 ** (retry_count - 1)))
-            else:
+        except (ssl.SSLError, DownloadError):
+            if retry_count == max_retries - 1:
                 raise
+            time.sleep(int(2 ** retry_count))
 
 
 def sync_one_difference(options, binary_map, difference, source_names):
@@ -422,14 +415,27 @@ def sync_one_difference(options, binary_map, difference, source_names):
     from_srcpkg = GenericSourcePackage(
         package=src, version=difference.parent_source_version)
     from_srcpkg.distribution = options.source.distribution.name
-    retry_errors(from_srcpkg.pull_dsc)
+    try:
+        # pull_dsc() is a deprecated no-op in ubuntutools; the actual
+        # download only happens lazily when the .dsc property is accessed.
+        # Force and retry that here so a single package failing to
+        # download (e.g. Launchpad librarian timeouts/outages) doesn't
+        # take down the whole sync run.
+        retry_errors(lambda: from_srcpkg.dsc)
+    except (DownloadError, ssl.SSLError) as e:
+        print("[Skipping (download failed)] %s: %s" % (src, e))
+        return False
 
     if difference.source_version is not None:
         # Check whether this will require a fakesync.
         to_srcpkg = GenericSourcePackage(
             package=src, version=difference.source_version)
         to_srcpkg.distribution = options.target.distribution.name
-        retry_errors(to_srcpkg.pull_dsc)
+        try:
+            retry_errors(lambda: to_srcpkg.dsc)
+        except (DownloadError, ssl.SSLError) as e:
+            print("[Skipping (download failed)] %s: %s" % (src, e))
+            return False
         if not from_srcpkg.dsc.compare_dsc(to_srcpkg.dsc):
             print("[Skipping (requires fakesync)] %s_%s (vs %s)" % (
                 src, difference.parent_source_version,
