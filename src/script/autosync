@@ -73,6 +73,16 @@ class Percentages:
         return (float(number) / self.total) * 100
 
 
+def timestamp():
+    """Return the current local time as a log-friendly string.
+
+    The generated report log (unlike the systemd journal) has no
+    timestamps of its own, so callers sprinkle this in to make it
+    possible to tell how long a run, or an individual package, took.
+    """
+    return time.strftime("%Y-%m-%d %H:%M:%S")
+
+
 def read_blocklist(url):
     """Parse resource at given URL as a 'blocklist'.
 
@@ -410,7 +420,7 @@ def retry_errors(func):
 
 def sync_one_difference(options, binary_map, difference, source_names):
     src = difference.sourcepackagename
-    print(" * Trying to add %s ..." % src)
+    print("%s  * Trying to add %s ..." % (timestamp(), src))
 
     from_srcpkg = GenericSourcePackage(
         package=src, version=difference.parent_source_version)
@@ -507,6 +517,26 @@ def copy_packages(options, source_names):
 
 
 def sync_differences(options):
+    """Run a sync attempt, logging start/finish timestamps around it.
+
+    The generated report log has no timestamps of its own; log the run's
+    start and finish time here (with elapsed duration) so it's possible to
+    tell how long a run took, even if it fails partway through with an
+    unhandled exception.
+    """
+    start_time = time.time()
+    print("%s Starting sync run" % timestamp())
+    try:
+        _sync_differences_once(options)
+    finally:
+        elapsed = time.time() - start_time
+        hours, remainder = divmod(int(elapsed), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        print("%s Finished sync run (elapsed: %02dh%02dm%02ds)" % (
+            timestamp(), hours, minutes, seconds))
+
+
+def _sync_differences_once(options):
     stat_us = 0
     stat_cant_update = 0
     stat_updated = 0
