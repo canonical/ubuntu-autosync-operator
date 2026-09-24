@@ -804,17 +804,6 @@ def main():
     options.launchpad = Launchpad.login_with(
         CONSUMER_KEY, options.launchpad_instance, version="devel")
 
-    if options.log_directory is not None:
-        now = time.gmtime()
-        log_relative_path = os.path.join(
-            time.strftime("%F", now), "%s.log" % time.strftime("%T", now))
-        log_file = os.path.join(options.log_directory, log_relative_path)
-        if not os.path.isdir(os.path.dirname(log_file)):
-            os.makedirs(os.path.dirname(log_file))
-        sys.stdout = open(log_file, "w", buffering=1)
-    else:
-        log_file = None
-
     options.source = Values()
     options.source.launchpad = options.launchpad
     options.source.distribution = options.fromdistro
@@ -828,6 +817,21 @@ def main():
     options.target.distribution = options.todistro
     options.target.suite = options.tosuite
     lputils.setup_location(options.target, default_pocket="Proposed")
+
+    if options.log_directory is not None:
+        # Logs are grouped under the active target series so that the
+        # log directory doesn't grow unbounded across releases.
+        series_log_directory = os.path.join(
+            options.log_directory, options.target.series.name)
+        now = time.gmtime()
+        log_relative_path = os.path.join(
+            time.strftime("%F", now), "%s.log" % time.strftime("%T", now))
+        log_file = os.path.join(series_log_directory, log_relative_path)
+        if not os.path.isdir(os.path.dirname(log_file)):
+            os.makedirs(os.path.dirname(log_file))
+        sys.stdout = open(log_file, "w", buffering=1)
+    else:
+        log_file = None
 
     # This is a very crude check, and easily bypassed.  It's simply here to
     # discourage people from causing havoc by mistake.  A mass autosync is
@@ -851,7 +855,7 @@ def main():
 
     if options.log_directory is not None:
         sys.stdout.close()
-        current_link = os.path.join(options.log_directory, "current.log")
+        current_link = os.path.join(series_log_directory, "current.log")
         try:
             os.unlink(current_link)
         except OSError as e:
