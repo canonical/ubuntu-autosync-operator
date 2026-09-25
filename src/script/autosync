@@ -536,6 +536,21 @@ def sync_differences(options):
             timestamp(), hours, minutes, seconds))
 
 
+def run_sync_differences(options):
+    """Run sync_differences and mirror unhandled exceptions into the report log."""
+    try:
+        sync_differences(options)
+    except Exception:
+        import traceback
+
+        print("\nSync run failed with an unhandled exception:", file=sys.stdout)
+        traceback.print_exc(file=sys.stdout)
+        raise
+    finally:
+        if options.log_directory is not None:
+            sys.stdout.flush()
+
+
 def _sync_differences_once(options):
     stat_us = 0
     stat_cant_update = 0
@@ -851,7 +866,7 @@ def main():
 
     options.requestor = options.launchpad.people["katie"]
 
-    sync_differences(options)
+    run_sync_differences(options)
 
     if options.log_directory is not None:
         sys.stdout.close()
