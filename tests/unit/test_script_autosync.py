@@ -1,9 +1,14 @@
 import errno
 import importlib.util
+import io
 import sys
-import types
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
+
+import pytest
+
+SCRIPT_PATH = Path(__file__).resolve().parents[2] / "src" / "script" / "autosync"
 
 
 class FakeStdout:
@@ -44,64 +49,64 @@ class FakeLogFile:
         self.closed = True
 
 
-def load_script_autosync():
-    apt_pkg = types.ModuleType("apt_pkg")
+def load_script_module(monkeypatch):
+    apt_pkg = ModuleType("apt_pkg")
     apt_pkg.init = lambda: None
-    sys.modules["apt_pkg"] = apt_pkg
+    apt_pkg.TagFile = object
+    apt_pkg.parse_depends = lambda value: []
+    apt_pkg.version_compare = lambda left, right: 0
+    monkeypatch.setitem(sys.modules, "apt_pkg", apt_pkg)
 
-    debian = types.ModuleType("debian")
+    debian = ModuleType("debian")
     debian.deb822 = object()
-    sys.modules["debian"] = debian
+    monkeypatch.setitem(sys.modules, "debian", debian)
 
-    launchpad_module = types.ModuleType("launchpadlib.launchpad")
+    launchpadlib = ModuleType("launchpadlib")
+    launchpadlib_launchpad = ModuleType("launchpadlib.launchpad")
 
     class FakeLaunchpad:
         @staticmethod
         def login_with(*args, **kwargs):
             return None
 
-    launchpad_module.Launchpad = FakeLaunchpad
-    sys.modules["launchpadlib"] = types.ModuleType("launchpadlib")
-    sys.modules["launchpadlib.launchpad"] = launchpad_module
+    launchpadlib_launchpad.Launchpad = FakeLaunchpad
+    monkeypatch.setitem(sys.modules, "launchpadlib", launchpadlib)
+    monkeypatch.setitem(sys.modules, "launchpadlib.launchpad", launchpadlib_launchpad)
 
-    restful_errors = types.ModuleType("lazr.restfulclient.errors")
+    lazr = ModuleType("lazr")
+    restfulclient = ModuleType("lazr.restfulclient")
+    restfulclient_errors = ModuleType("lazr.restfulclient.errors")
+    restfulclient_errors.ServerError = type("ServerError", (Exception,), {})
+    monkeypatch.setitem(sys.modules, "lazr", lazr)
+    monkeypatch.setitem(sys.modules, "lazr.restfulclient", restfulclient)
+    monkeypatch.setitem(sys.modules, "lazr.restfulclient.errors", restfulclient_errors)
 
-    class ServerError(Exception):
-        pass
+    ubuntutools = ModuleType("ubuntutools")
+    ubuntutools_archive = ModuleType("ubuntutools.archive")
+    ubuntutools_archive.DownloadError = type("DownloadError", (Exception,), {})
+    ubuntutools_archive.SourcePackage = object
+    monkeypatch.setitem(sys.modules, "ubuntutools", ubuntutools)
+    monkeypatch.setitem(sys.modules, "ubuntutools.archive", ubuntutools_archive)
 
-    restful_errors.ServerError = ServerError
-    sys.modules["lazr"] = types.ModuleType("lazr")
-    sys.modules["lazr.restfulclient"] = types.ModuleType("lazr.restfulclient")
-    sys.modules["lazr.restfulclient.errors"] = restful_errors
-
-    archive = types.ModuleType("ubuntutools.archive")
-    archive.DownloadError = type("DownloadError", (Exception,), {})
-    archive.SourcePackage = object
-    sys.modules["ubuntutools"] = types.ModuleType("ubuntutools")
-    sys.modules["ubuntutools.archive"] = archive
-
-    lputils = types.ModuleType("lputils")
+    lputils = ModuleType("lputils")
     lputils.setup_location = lambda *args, **kwargs: None
-    sys.modules["lputils"] = lputils
+    monkeypatch.setitem(sys.modules, "lputils", lputils)
 
-    module_path = Path(__file__).resolve().parents[2] / "src" / "script" / "autosync"
-    spec = importlib.util.spec_from_loader(
-        "script_autosync", SourceFileLoader("script_autosync", str(module_path))
-    )
+    loader = SourceFileLoader("script_autosync", str(SCRIPT_PATH))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
     module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
+    loader.exec_module(module)
     return module
 
 
 def configure_script_main(monkeypatch, script_autosync, fake_log_file):
     owner = object()
-    launchpad = types.SimpleNamespace(me=owner, people={"katie": object()})
+    launchpad = SimpleNamespace(me=owner, people={"katie": object()})
 
     def fake_setup_location(location, default_pocket=None):
         if default_pocket is not None:
-            location.series = types.SimpleNamespace(name="questing")
-            location.archive = types.SimpleNamespace(owner=owner)
+            location.series = SimpleNamespace(name="questing")
+            location.archive = SimpleNamespace(owner=owner, participants=[])
 
     monkeypatch.setattr(script_autosync.sys, "stdout", FakeStdout())
     monkeypatch.setattr(script_autosync.sys, "argv", ["autosync", "--log-directory", "/logs"])
@@ -131,7 +136,7 @@ def configure_script_main(monkeypatch, script_autosync, fake_log_file):
 
 def test_main_updates_top_level_current_log_symlink(monkeypatch):
     """Regression test for LP: #2129941 after PR #75 moved logs under series."""
-    script_autosync = load_script_autosync()
+    script_autosync = load_script_module(monkeypatch)
     fake_log_file = FakeLogFile()
 
     configure_script_main(monkeypatch, script_autosync, fake_log_file)
@@ -157,3 +162,34 @@ def test_main_updates_top_level_current_log_symlink(monkeypatch):
             "/logs/current.log",
         )
     ]
+
+
+def test_run_sync_differences_logs_traceback_to_stdout_and_flushes(monkeypatch):
+    script_autosync = load_script_module(monkeypatch)
+
+    class TrackingStdout(io.StringIO):
+        def __init__(self):
+            super().__init__()
+            self.flushed = False
+
+        def flush(self):
+            self.flushed = True
+            super().flush()
+
+    output = TrackingStdout()
+    options = SimpleNamespace(log_directory="/tmp/autosync-logs")
+
+    def raise_boom(_):
+        raise ValueError("boom")
+
+    monkeypatch.setattr(script_autosync, "sync_differences", raise_boom)
+    monkeypatch.setattr(script_autosync.sys, "stdout", output)
+
+    with pytest.raises(ValueError, match="boom"):
+        script_autosync.run_sync_differences(options)
+
+    logged_output = output.getvalue()
+    assert "Sync run failed with an unhandled exception:" in logged_output
+    assert "Traceback (most recent call last):" in logged_output
+    assert "ValueError: boom" in logged_output
+    assert output.flushed is True
