@@ -190,8 +190,8 @@ class AutoSync:
         systemd.service_restart(f"{AUTOSYNC_SERVICE}.timer")
 
     def run_sync(self):
-        """Trigger a blocking execution of the autosync service."""
-        systemd.service_start(f"{AUTOSYNC_SERVICE}.service")
+        """Trigger a non-blocking execution of the autosync service."""
+        systemd.service_start(f"{AUTOSYNC_SERVICE}.service", "--no-block")
 
     def setup_systemd_unit(self):
         """Set up autosync service and timer with proxy configuration."""

@@ -5,7 +5,7 @@
 
 from subprocess import CalledProcessError
 from types import SimpleNamespace
-from unittest.mock import MagicMock, PropertyMock, patch
+from unittest.mock import MagicMock, PropertyMock, call, patch
 
 import ops
 import pytest
@@ -171,23 +171,57 @@ def test_config_changed_event_blocks_charm_when_lp_secret_not_configured(ctx, ba
 
 
 @patch("charm.AutoSync.run_sync")
-def test_sync_now_action_triggers_autosync_and_logs_message(run_sync_mock, ctx, base_state):
-    out = ctx.run(ctx.on.action("sync-now"), base_state)
+@patch("charm.AutoSync.configure_run")
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_sync_now_action_reconfigures_dry_run_before_triggering_run(
+    configure_run_mock, run_sync_mock, dry_run, ctx
+):
+    state_in = State(leader=True, config={"dry_run": dry_run})
+    calls = MagicMock()
+    calls.attach_mock(configure_run_mock, "configure_run")
+    calls.attach_mock(run_sync_mock, "run_sync")
 
-    assert ctx.action_logs == ["Running autosync"]
+    out = ctx.run(ctx.on.action("sync-now"), state_in)
+
+    assert ctx.action_logs == [
+        f"Running autosync (dry_run={dry_run})",
+        "Autosync run triggered",
+    ]
     assert out.unit_status == ActiveStatus()
-    run_sync_mock.assert_called_once()
+    calls.assert_has_calls([call.configure_run(dry_run), call.run_sync()])
 
 
 @patch("charm.AutoSync.run_sync")
-def test_sync_now_action_sets_status_message_when_run_fails(run_sync_mock, ctx, base_state):
+@patch("charm.AutoSync.configure_run")
+def test_sync_now_action_sets_status_message_when_run_fails(
+    configure_run_mock, run_sync_mock, ctx, base_state
+):
+    state_in = State(leader=True, config={"dry_run": False})
     run_sync_mock.side_effect = CalledProcessError(1, "sync")
 
-    out = ctx.run(ctx.on.action("sync-now"), base_state)
+    out = ctx.run(ctx.on.action("sync-now"), state_in)
 
     assert out.unit_status == ActiveStatus(
         "Failed to run autosync. Check `juju debug-log` for details."
     )
+    configure_run_mock.assert_called_once_with(False)
+
+
+@patch("charm.AutoSync.run_sync")
+@patch("charm.AutoSync.configure_run")
+def test_sync_now_action_sets_status_message_when_run_configuration_fails(
+    configure_run_mock, run_sync_mock, ctx, base_state
+):
+    state_in = State(leader=True, config={"dry_run": False})
+    configure_run_mock.side_effect = OSError("write failed")
+
+    out = ctx.run(ctx.on.action("sync-now"), state_in)
+
+    assert ctx.action_logs == ["Autosync run failed"]
+    assert out.unit_status == ActiveStatus(
+        "Failed to run autosync. Check `juju debug-log` for details."
+    )
+    run_sync_mock.assert_not_called()
 
 
 @patch(

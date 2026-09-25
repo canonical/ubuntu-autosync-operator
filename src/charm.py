@@ -156,10 +156,13 @@ class UbuntuAutoSyncCharm(ops.CharmBase):
         """Trigger an immediate autosync execution."""
         self.unit.status = ops.MaintenanceStatus("Running autosync")
 
+        dry_run = bool(self.config.get("dry_run", False))
         try:
-            event.log("Running autosync")
+            self._autosync.configure_run(dry_run)
+            event.log(f"Running autosync (dry_run={dry_run})")
             self._autosync.run_sync()
-        except (CalledProcessError, IOError):
+            event.log("Autosync run triggered")
+        except (CalledProcessError, IOError, OSError):
             event.log("Autosync run failed")
             self.unit.status = ops.ActiveStatus(
                 "Failed to run autosync. Check `juju debug-log` for details."

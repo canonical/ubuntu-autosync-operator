@@ -75,7 +75,7 @@ def test_run_sync_starts_service(monkeypatch):
     worker = AutoSync()
     worker.run_sync()
 
-    assert ("autosync.service",) in starts
+    assert ("autosync.service", "--no-block") in starts
 
 
 def test_configure_run_writes_script_with_dry_run(monkeypatch):
