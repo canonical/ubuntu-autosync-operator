@@ -540,10 +540,10 @@ def run_sync_differences(options):
     """Run sync_differences and mirror unhandled exceptions into the report log."""
     try:
         sync_differences(options)
-    except Exception:
+    except BaseException:
         import traceback
 
-        print("\nSync run failed with an unhandled exception:", file=sys.stdout)
+        print("\nSync run failed with an unhandled error:", file=sys.stdout)
         traceback.print_exc(file=sys.stdout)
         raise
     finally:

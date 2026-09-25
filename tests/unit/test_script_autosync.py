@@ -77,7 +77,7 @@ def test_run_sync_differences_logs_traceback_to_stdout_and_flushes(monkeypatch):
         script_autosync.run_sync_differences(options)
 
     logged_output = output.getvalue()
-    assert "Sync run failed with an unhandled exception:" in logged_output
+    assert "Sync run failed with an unhandled error:" in logged_output
     assert "Traceback (most recent call last):" in logged_output
     assert "ValueError: boom" in logged_output
     assert output.flushed is True
