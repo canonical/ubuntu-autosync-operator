@@ -855,13 +855,15 @@ def main():
 
     if options.log_directory is not None:
         sys.stdout.close()
-        current_link = os.path.join(series_log_directory, "current.log")
+        current_link = os.path.join(options.log_directory, "current.log")
+        current_target = os.path.join(
+            options.target.series.name, log_relative_path)
         try:
             os.unlink(current_link)
         except OSError as e:
             if e.errno != errno.ENOENT:
                 raise
-        os.symlink(log_relative_path, current_link)
+        os.symlink(current_target, current_link)
 
 
 if __name__ == '__main__':
