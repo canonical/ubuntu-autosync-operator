@@ -845,6 +845,22 @@ def main():
         if not os.path.isdir(os.path.dirname(log_file)):
             os.makedirs(os.path.dirname(log_file))
         sys.stdout = open(log_file, "w", buffering=1)
+
+        # Point current.log at this run's log file immediately, rather
+        # than waiting for the run to finish.  This way current.log
+        # always reflects the most recent attempt -- including ones
+        # that crash or get killed partway through -- instead of
+        # silently going stale behind the last run that happened to
+        # complete without error.
+        current_link = os.path.join(options.log_directory, "current.log")
+        current_target = os.path.join(
+            options.target.series.name, log_relative_path)
+        try:
+            os.unlink(current_link)
+        except OSError as e:
+            if e.errno != errno.ENOENT:
+                raise
+        os.symlink(current_target, current_link)
     else:
         log_file = None
 
@@ -866,19 +882,11 @@ def main():
 
     options.requestor = options.launchpad.people["katie"]
 
-    run_sync_differences(options)
-
-    if options.log_directory is not None:
-        sys.stdout.close()
-        current_link = os.path.join(options.log_directory, "current.log")
-        current_target = os.path.join(
-            options.target.series.name, log_relative_path)
-        try:
-            os.unlink(current_link)
-        except OSError as e:
-            if e.errno != errno.ENOENT:
-                raise
-        os.symlink(current_target, current_link)
+    try:
+        run_sync_differences(options)
+    finally:
+        if options.log_directory is not None:
+            sys.stdout.close()
 
 
 if __name__ == '__main__':

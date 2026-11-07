@@ -164,6 +164,76 @@ def test_main_updates_top_level_current_log_symlink(monkeypatch):
     ]
 
 
+def test_main_updates_current_log_symlink_before_run_starts(monkeypatch):
+    """current.log must point at this run's log before sync_differences runs.
+
+    This ensures the symlink reflects the most recent attempt even if the
+    run later crashes or is killed partway through, instead of staying
+    stuck on the last run that happened to complete successfully.
+    """
+    script_autosync = load_script_module(monkeypatch)
+    fake_log_file = FakeLogFile()
+
+    configure_script_main(monkeypatch, script_autosync, fake_log_file)
+
+    call_order = []
+    monkeypatch.setattr(
+        script_autosync.os,
+        "unlink",
+        lambda path: (_ for _ in ()).throw(OSError(errno.ENOENT, "missing")),
+    )
+    monkeypatch.setattr(
+        script_autosync.os,
+        "symlink",
+        lambda target, link_name: call_order.append("symlink"),
+    )
+
+    def tracking_sync_differences(options):
+        call_order.append("sync_differences")
+
+    monkeypatch.setattr(script_autosync, "sync_differences", tracking_sync_differences)
+
+    script_autosync.main()
+
+    assert call_order == ["symlink", "sync_differences"]
+
+
+def test_main_updates_current_log_symlink_even_if_run_crashes(monkeypatch):
+    """current.log should be created even when the run fails."""
+    script_autosync = load_script_module(monkeypatch)
+    fake_log_file = FakeLogFile()
+
+    configure_script_main(monkeypatch, script_autosync, fake_log_file)
+
+    symlink_calls = []
+    monkeypatch.setattr(
+        script_autosync.os,
+        "unlink",
+        lambda path: (_ for _ in ()).throw(OSError(errno.ENOENT, "missing")),
+    )
+    monkeypatch.setattr(
+        script_autosync.os,
+        "symlink",
+        lambda target, link_name: symlink_calls.append((target, link_name)),
+    )
+
+    def raise_boom(options):
+        raise ValueError("boom")
+
+    monkeypatch.setattr(script_autosync, "sync_differences", raise_boom)
+
+    with pytest.raises(ValueError, match="boom"):
+        script_autosync.main()
+
+    assert fake_log_file.closed
+    assert symlink_calls == [
+        (
+            "questing/2026-09-25/07:34:30.log",
+            "/logs/current.log",
+        )
+    ]
+
+
 def test_run_sync_differences_logs_traceback_to_stdout_and_flushes(monkeypatch):
     script_autosync = load_script_module(monkeypatch)
 
