@@ -263,3 +263,82 @@ def test_run_sync_differences_logs_traceback_to_stdout_and_flushes(monkeypatch):
     assert "Traceback (most recent call last):" in logged_output
     assert "ValueError: boom" in logged_output
     assert output.flushed is True
+
+
+def test_retry_errors_retries_connection_error_then_succeeds(monkeypatch):
+    """Transient connection drops (e.g. RemoteDisconnected) should retry."""
+    script_autosync = load_script_module(monkeypatch)
+    monkeypatch.setattr(script_autosync.time, "sleep", lambda seconds: None)
+
+    attempts = []
+
+    def flaky():
+        attempts.append(None)
+        if len(attempts) < 3:
+            raise ConnectionError("Remote end closed connection")
+        return "ok"
+
+    assert script_autosync.retry_errors(flaky) == "ok"
+    assert len(attempts) == 3
+
+
+def test_retry_errors_retries_server_error_then_succeeds(monkeypatch):
+    """Transient Launchpad webservice errors (e.g. 503) should retry."""
+    script_autosync = load_script_module(monkeypatch)
+    monkeypatch.setattr(script_autosync.time, "sleep", lambda seconds: None)
+
+    attempts = []
+
+    def flaky():
+        attempts.append(None)
+        if len(attempts) < 2:
+            raise script_autosync.ServerError("503 Service Unavailable")
+        return "ok"
+
+    assert script_autosync.retry_errors(flaky) == "ok"
+    assert len(attempts) == 2
+
+
+def test_retry_errors_gives_up_after_max_retries(monkeypatch):
+    """retry_errors should stop retrying and re-raise after enough failures."""
+    script_autosync = load_script_module(monkeypatch)
+    monkeypatch.setattr(script_autosync.time, "sleep", lambda seconds: None)
+
+    attempts = []
+
+    def always_fails():
+        attempts.append(None)
+        raise ConnectionError("still down")
+
+    with pytest.raises(ConnectionError, match="still down"):
+        script_autosync.retry_errors(always_fails)
+
+    assert len(attempts) == 7
+
+
+def test_already_in_target_series_retries_transient_launchpad_error(monkeypatch):
+    """already_in_target_series should recover from a transient LP failure.
+
+    Regression test: a RemoteDisconnected/ServerError from Launchpad part
+    way through a sync run used to crash the whole script (and, before the
+    current.log fix, leave the dashboard pointing at a stale run).
+    """
+    script_autosync = load_script_module(monkeypatch)
+    monkeypatch.setattr(script_autosync.time, "sleep", lambda seconds: None)
+
+    calls = []
+
+    def flaky_get_published_sources(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise ConnectionError("Remote end closed connection")
+        return []
+
+    archive = SimpleNamespace(getPublishedSources=flaky_get_published_sources)
+    options = SimpleNamespace(
+        target=SimpleNamespace(series=SimpleNamespace(name="questing"), archive=archive)
+    )
+    difference = SimpleNamespace(sourcepackagename="hello", parent_source_version="2.0")
+
+    assert script_autosync.already_in_target_series(options, difference) is False
+    assert len(calls) == 2

@@ -227,10 +227,12 @@ def read_debian_sources(options):
 
 def read_new_queue(options):
     """Return the set of packages already in the NEW queue."""
-    new_queue = options.target.series.getPackageUploads(
-        archive=options.target.archive, status="New")
-    return set([pu.package_name for pu in new_queue
-                if pu.contains_source or pu.contains_copy])
+    def fetch_new_queue():
+        new_queue = options.target.series.getPackageUploads(
+            archive=options.target.archive, status="New")
+        return set([pu.package_name for pu in new_queue
+                    if pu.contains_source or pu.contains_copy])
+    return retry_errors(fetch_new_queue)
 
 
 def question(options, message, choices, default):
@@ -307,12 +309,13 @@ class FakeDifference:
         such, this is expensive, so we only do it when necessary.
         """
         if not self.fetched_parent_source_version:
-            spphs = self.options.source.archive.getPublishedSources(
-                distro_series=self.options.source.series,
-                pocket=self.options.source.pocket,
-                source_name=self.sourcepackagename, exact_match=True,
-                status="Published")
-            spphs = version_sort_spphs(spphs)
+            def fetch_spphs():
+                return self.options.source.archive.getPublishedSources(
+                    distro_series=self.options.source.series,
+                    pocket=self.options.source.pocket,
+                    source_name=self.sourcepackagename, exact_match=True,
+                    status="Published")
+            spphs = version_sort_spphs(retry_errors(fetch_spphs))
             if spphs:
                 self.real_parent_source_version = \
                     spphs[0].source_package_version
@@ -350,10 +353,10 @@ def published_in_source_series(options, difference):
     # actually being published in options.source.series.  Filter those out.
     src = difference.sourcepackagename
     from_version = difference.parent_source_version
-    from_src = options.source.archive.getPublishedSources(
+    from_src = retry_errors(lambda: options.source.archive.getPublishedSources(
         distro_series=options.source.series, pocket=options.source.pocket,
         source_name=src, version=from_version, exact_match=True,
-        status="Published")
+        status="Published"))
     if not from_src:
         if options.verbose:
             print(
@@ -376,9 +379,9 @@ def already_in_target_series(options, difference):
     src = difference.sourcepackagename
     from_version = difference.parent_source_version
     to_src = version_sort_spphs(filter_pockets(
-        options.target.archive.getPublishedSources(
+        retry_errors(lambda: options.target.archive.getPublishedSources(
             distro_series=options.target.series, source_name=src,
-            exact_match=True)))
+            exact_match=True))))
     if (to_src and
         apt_pkg.version_compare(
             from_version, to_src[0].source_package_version) <= 0):
@@ -403,16 +406,22 @@ def architectures_allowed(dsc, target):
 
 
 def retry_errors(func):
-    # Launchpad librarian downloads occasionally fail transiently (502/503
-    # responses, read timeouts, dropped connections, ...).  Retry any of
-    # these a bounded number of times with backoff instead of only the
-    # ones that expose a recognisable HTTP status code, then give up and
-    # let the caller decide whether to skip this package.
+    # Launchpad (both the librarian and the webservice API) occasionally
+    # fails transiently: 502/503 responses, read timeouts, dropped
+    # connections, etc.  Retry any of these a bounded number of times with
+    # backoff instead of only the ones that expose a recognisable HTTP
+    # status code, then give up and let the caller decide what to do
+    # (skip the package, or let the exception propagate).
+    #
+    # ConnectionError covers things like http.client.RemoteDisconnected
+    # (the connection being dropped mid-request), and ServerError covers
+    # Launchpad webservice calls returning a non-2xx response (most
+    # commonly a 503 while Launchpad is temporarily unavailable).
     max_retries = 7
     for retry_count in range(max_retries):
         try:
             return func()
-        except (ssl.SSLError, DownloadError):
+        except (ssl.SSLError, DownloadError, ConnectionError, ServerError):
             if retry_count == max_retries - 1:
                 raise
             time.sleep(int(2 ** retry_count))
@@ -599,8 +608,9 @@ def _sync_differences_once(options):
                 if src_is_blocklisted:
                     print("[blocklistED] %s" % src_ver)
                 else:
-                    comments = options.target.series.getDifferenceComments(
-                        source_package_name=src)
+                    comments = retry_errors(
+                        lambda: options.target.series.getDifferenceComments(
+                            source_package_name=src))
                     if comments:
                         print("""[blocklistED] %s (%s: "%s")""" % (
                             src_ver, comments[-1].comment_author.name,
@@ -687,8 +697,8 @@ def _sync_differences_once(options):
                     (src, from_version))
             continue
         to_src = version_sort_spphs(filter_pockets(
-            options.target.archive.getPublishedSources(
-                source_name=src, exact_match=True)))
+            retry_errors(lambda: options.target.archive.getPublishedSources(
+                source_name=src, exact_match=True))))
         if (to_src and
             apt_pkg.version_compare(
                 from_version, to_src[0].source_package_version) <= 0):
