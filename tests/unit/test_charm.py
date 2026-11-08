@@ -164,10 +164,58 @@ def test_config_changed_event_blocks_charm_on_invalid_schedule(
     )
 
 
-def test_config_changed_event_blocks_charm_when_lp_secret_not_configured(ctx, base_state):
+@patch("charm.AutoSync.configure_url")
+@patch("charm.AutoSync.configure_run")
+@patch("charm.AutoSync.configure_schedule")
+def test_config_changed_event_blocks_charm_when_lp_secret_not_configured(
+    configure_schedule_mock, configure_run_mock, configure_url_mock, ctx, base_state
+):
     out = ctx.run(ctx.on.config_changed(), base_state)
 
     assert out.unit_status == BlockedStatus("Launchpad oauth token config missing.")
+    configure_run_mock.assert_called_once()
+    configure_schedule_mock.assert_called_once()
+
+
+@patch(
+    "charm.UbuntuAutoSyncCharm._lpuser_lp_oauthkey",
+    new_callable=PropertyMock,
+)
+@patch("charm.AutoSync.configure_lpoauthkey")
+@patch("charm.AutoSync.configure_url")
+@patch("charm.AutoSync.configure_run")
+@patch("charm.AutoSync.configure_schedule")
+def test_config_changed_event_still_applies_run_mode_when_url_config_invalid(
+    configure_schedule_mock,
+    configure_run_mock,
+    configure_url_mock,
+    configure_lpoauth_mock,
+    lp_oauth_prop_mock,
+    ctx,
+):
+    """A failure in one config aspect (URL) must not skip the others.
+
+    Regression test: dry_run/sync_hours used to only be applied after the
+    URL and Launchpad secret steps succeeded, so an unrelated failure
+    earlier in the hook (e.g. a transient secret lookup issue) silently
+    left dry_run/sync_hours unapplied on disk.
+    """
+    state_in = State(
+        leader=True,
+        config={"dry_run": False, "sync_hours": "6"},
+    )
+    lp_oauth_prop_mock.return_value = "fake-token"
+    configure_lpoauth_mock.return_value = True
+    configure_url_mock.side_effect = ValueError("invalid url")
+
+    out = ctx.run(ctx.on.config_changed(), state_in)
+
+    assert out.unit_status == BlockedStatus(
+        "Invalid configuration. Check `juju debug-log` for details."
+    )
+    configure_run_mock.assert_called_once_with(False)
+    configure_schedule_mock.assert_called_once_with("6")
+    configure_lpoauth_mock.assert_called_once_with("fake-token")
 
 
 @patch("charm.AutoSync.run_sync")

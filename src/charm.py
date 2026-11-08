@@ -110,44 +110,57 @@ class UbuntuAutoSyncCharm(ops.CharmBase):
         self.unit.status = ops.ActiveStatus()
 
     def _on_config_changed(self, event):
-        """Update configuration."""
+        """Update configuration.
+
+        Each configuration aspect (URL, run mode/schedule, Launchpad
+        credentials) is applied independently: a failure in one (e.g. a
+        transient Launchpad secret lookup failure) must not prevent the
+        others (e.g. dry_run/sync_hours) from being applied.  The unit
+        ends up Blocked if any aspect failed, but every aspect that could
+        be applied was applied.
+        """
         logger.debug("config changed event")
         self.unit.status = ops.MaintenanceStatus("Updating configuration")
+
+        blocked_message = None
+
         try:
             self._autosync.configure_url(self._get_external_url())
+            logger.debug("config change done - url set")
         except ValueError:
-            self.unit.status = ops.BlockedStatus(
-                "Invalid configuration. Check `juju debug-log` for details."
-            )
-            return False
-        logger.debug("config change done - url set")
-
-        lp_key_data = self._lpuser_lp_oauthkey
-        if lp_key_data is None:
-            logger.warning("Launchpad credentials unavailable, unable to autosync.")
-            self.unit.status = ops.BlockedStatus("Launchpad oauth token config missing.")
-            return False
-        else:
-            logger.debug("config - got lpoauthkey (length %d)", len(lp_key_data))
-            if not self._autosync.configure_lpoauthkey(lp_key_data):
-                self.unit.status = ops.BlockedStatus("Failed to update Launchpad oauth token.")
-                return False
-        logger.debug("config change done - lp oauth key set")
+            logger.warning("Failed to configure URL: invalid configuration.")
+            blocked_message = "Invalid configuration. Check `juju debug-log` for details."
 
         try:
             self._autosync.configure_run(bool(self.config.get("dry_run", False)))
             self._autosync.configure_schedule(
                 str(self.config.get("sync_hours", "")).strip() or DEFAULT_SYNC_HOURS
             )
+            logger.debug("config change done - run mode and schedule set")
         except ValueError:
-            self.unit.status = ops.BlockedStatus(
+            logger.warning("Failed to configure schedule: invalid sync_hours.")
+            blocked_message = blocked_message or (
                 "Invalid sync hours. Use comma-separated integers in [0,23], e.g. '5,11,17,23'."
             )
-            return False
         except IOError:
-            self.unit.status = ops.BlockedStatus(
+            logger.warning("Failed to write autosync run configuration.")
+            blocked_message = blocked_message or (
                 "Failed to write autosync run configuration. Check `juju debug-log` for details."
             )
+
+        lp_key_data = self._lpuser_lp_oauthkey
+        if lp_key_data is None:
+            logger.warning("Launchpad credentials unavailable, unable to autosync.")
+            blocked_message = blocked_message or "Launchpad oauth token config missing."
+        else:
+            logger.debug("config - got lpoauthkey (length %d)", len(lp_key_data))
+            if self._autosync.configure_lpoauthkey(lp_key_data):
+                logger.debug("config change done - lp oauth key set")
+            else:
+                blocked_message = blocked_message or "Failed to update Launchpad oauth token."
+
+        if blocked_message is not None:
+            self.unit.status = ops.BlockedStatus(blocked_message)
             return False
 
         self.unit.status = ops.ActiveStatus()
