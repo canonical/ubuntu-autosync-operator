@@ -405,6 +405,9 @@ def architectures_allowed(dsc, target):
     return False
 
 
+MAX_RETRY_AFTER = 30 * 60
+
+
 def retry_errors(func):
     # Launchpad (both the librarian and the webservice API) occasionally
     # fails transiently: 502/503 responses, read timeouts, dropped
@@ -421,10 +424,30 @@ def retry_errors(func):
     for retry_count in range(max_retries):
         try:
             return func()
-        except (ssl.SSLError, DownloadError, ConnectionError, ServerError):
+        except (ssl.SSLError, DownloadError, ConnectionError, ServerError) as e:
             if retry_count == max_retries - 1:
                 raise
-            time.sleep(int(2 ** retry_count))
+            time.sleep(retry_delay(e, retry_count))
+
+
+def retry_delay(exception, retry_count):
+    """Work out how long to wait before retrying a failed call.
+
+    Launchpad's 503 responses usually carry a Retry-After header (RFC 9110)
+    telling us how long it expects to be unavailable for (e.g. during
+    planned downtime); honour it instead of guessing with backoff, but cap
+    it so a misbehaving response can't make us sleep for an unreasonable
+    amount of time.
+    """
+    response = getattr(exception, "response", None)
+    if response is not None:
+        retry_after = response.get("retry-after")
+        if retry_after is not None:
+            try:
+                return min(int(retry_after), MAX_RETRY_AFTER)
+            except ValueError:
+                pass
+    return int(2 ** retry_count)
 
 
 def sync_one_difference(options, binary_map, difference, source_names):
@@ -502,27 +525,38 @@ def copy_packages(options, source_names):
         copy_packages(options, source_names_right)
         return
 
-    try:
-        options.target.archive.copyPackages(
-            source_names=source_names,
-            from_archive=options.source.archive,
-            from_series=options.source.series.name,
-            to_series=options.target.series.name,
-            to_pocket=options.target.pocket,
-            include_binaries=False, sponsored=options.requestor,
-            auto_approve=True, silent=True)
-    except ServerError as e:
-        if len(source_names) < 100:
-            raise
-        if e.response.status != 503:
-            raise
-        print("Cannot copy %d packages at once; bisecting ..." %
-              len(source_names))
-        failed_copy = len(source_names)
-        source_names_left = source_names[:len(source_names) // 2]
-        source_names_right = source_names[len(source_names) // 2:]
-        copy_packages(options, source_names_left)
-        copy_packages(options, source_names_right)
+    max_retries = 7
+    for retry_count in range(max_retries):
+        try:
+            options.target.archive.copyPackages(
+                source_names=source_names,
+                from_archive=options.source.archive,
+                from_series=options.source.series.name,
+                to_series=options.target.series.name,
+                to_pocket=options.target.pocket,
+                include_binaries=False, sponsored=options.requestor,
+                auto_approve=True, silent=True)
+            return
+        except ServerError as e:
+            if e.response.status != 503:
+                raise
+            if len(source_names) >= 100:
+                print("Cannot copy %d packages at once; bisecting ..." %
+                      len(source_names))
+                failed_copy = len(source_names)
+                source_names_left = source_names[:len(source_names) // 2]
+                source_names_right = source_names[len(source_names) // 2:]
+                copy_packages(options, source_names_left)
+                copy_packages(options, source_names_right)
+                return
+            # There's nothing smaller left to bisect into.  Unlike a
+            # dropped connection, a 503 is an explicit response saying
+            # the request wasn't processed, so retrying in place is
+            # safe; honour Launchpad's Retry-After header instead of
+            # giving up immediately.
+            if retry_count == max_retries - 1:
+                raise
+            time.sleep(retry_delay(e, retry_count))
 
 
 def sync_differences(options):

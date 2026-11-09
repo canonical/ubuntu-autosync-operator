@@ -11,6 +11,18 @@ import pytest
 SCRIPT_PATH = Path(__file__).resolve().parents[2] / "src" / "script" / "autosync"
 
 
+class FakeHttpResponse(dict):
+    """Minimal stand-in for httplib2.Response.
+
+    Has a status attribute plus dict-like access to headers such as
+    retry-after.
+    """
+
+    def __init__(self, status, **headers):
+        super().__init__(headers)
+        self.status = status
+
+
 class FakeStdout:
     def detach(self):
         return self
@@ -316,6 +328,75 @@ def test_retry_errors_gives_up_after_max_retries(monkeypatch):
     assert len(attempts) == 7
 
 
+def test_retry_errors_sleeps_for_the_retry_after_header_on_server_error(monkeypatch):
+    """Launchpad 503s often carry a Retry-After header (RFC 9110); honour it.
+
+    Launchpad knows better than we do how long it expects to be
+    unavailable for, so this is more accurate than guessing with
+    exponential backoff.
+    """
+    script_autosync = load_script_module(monkeypatch)
+    sleep_calls = []
+    monkeypatch.setattr(script_autosync.time, "sleep", sleep_calls.append)
+
+    attempts = []
+
+    def flaky():
+        attempts.append(None)
+        if len(attempts) < 2:
+            error = script_autosync.ServerError("503 Service Unavailable")
+            error.response = {"retry-after": "120"}
+            raise error
+        return "ok"
+
+    assert script_autosync.retry_errors(flaky) == "ok"
+    assert sleep_calls == [120]
+
+
+def test_retry_errors_caps_the_retry_after_header_at_the_configured_maximum(monkeypatch):
+    """A Retry-After value above MAX_RETRY_AFTER must be capped.
+
+    This guards against sleeping for an unreasonable amount of time if
+    Launchpad (or a misbehaving proxy) ever sends back an excessive value.
+    """
+    script_autosync = load_script_module(monkeypatch)
+    sleep_calls = []
+    monkeypatch.setattr(script_autosync.time, "sleep", sleep_calls.append)
+
+    attempts = []
+
+    def flaky():
+        attempts.append(None)
+        if len(attempts) < 2:
+            error = script_autosync.ServerError("503 Service Unavailable")
+            error.response = {"retry-after": "7200"}
+            raise error
+        return "ok"
+
+    assert script_autosync.retry_errors(flaky) == "ok"
+    assert sleep_calls == [script_autosync.MAX_RETRY_AFTER]
+
+
+def test_retry_errors_falls_back_to_backoff_when_retry_after_header_missing(monkeypatch):
+    """Without a Retry-After header, fall back to the exponential backoff."""
+    script_autosync = load_script_module(monkeypatch)
+    sleep_calls = []
+    monkeypatch.setattr(script_autosync.time, "sleep", sleep_calls.append)
+
+    attempts = []
+
+    def flaky():
+        attempts.append(None)
+        if len(attempts) < 2:
+            error = script_autosync.ServerError("503 Service Unavailable")
+            error.response = {}
+            raise error
+        return "ok"
+
+    assert script_autosync.retry_errors(flaky) == "ok"
+    assert sleep_calls == [1]
+
+
 def test_already_in_target_series_retries_transient_launchpad_error(monkeypatch):
     """already_in_target_series should recover from a transient LP failure.
 
@@ -342,3 +423,76 @@ def test_already_in_target_series_retries_transient_launchpad_error(monkeypatch)
 
     assert script_autosync.already_in_target_series(options, difference) is False
     assert len(calls) == 2
+
+
+def test_copy_packages_retries_transient_server_error_without_bisecting(monkeypatch):
+    """A transient 503 below the bisection floor should be retried in place.
+
+    Regression test: a single transient Launchpad outage below the
+    100-package bisection floor used to immediately crash the whole sync
+    run (as seen in LP: #2129941's linked failure) instead of being
+    retried.
+    """
+    script_autosync = load_script_module(monkeypatch)
+    sleep_calls = []
+    monkeypatch.setattr(script_autosync.time, "sleep", sleep_calls.append)
+    script_autosync.failed_copy = None
+
+    calls = []
+
+    def flaky_copy_packages(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            error = script_autosync.ServerError("503 Service Unavailable")
+            error.response = FakeHttpResponse(503, **{"retry-after": "1"})
+            raise error
+
+    archive = SimpleNamespace(copyPackages=flaky_copy_packages)
+    options = SimpleNamespace(
+        source=SimpleNamespace(archive=object(), series=SimpleNamespace(name="sid")),
+        target=SimpleNamespace(
+            archive=archive, series=SimpleNamespace(name="questing"), pocket="Proposed"
+        ),
+        requestor=object(),
+    )
+
+    script_autosync.copy_packages(options, ["hello"])
+
+    assert len(calls) == 2
+    assert sleep_calls == [1]
+
+
+def test_copy_packages_bisects_immediately_for_large_batches(monkeypatch):
+    """A 503 at or above the bisection floor should still bisect first.
+
+    Regression test: copy_packages's own retry loop must not delay the
+    existing bisection behaviour for large batches, which already has a
+    proven strategy for working around persistent 503s.
+    """
+    script_autosync = load_script_module(monkeypatch)
+    monkeypatch.setattr(script_autosync.time, "sleep", lambda seconds: None)
+    script_autosync.failed_copy = None
+
+    calls = []
+
+    def flaky_copy_packages(**kwargs):
+        calls.append(kwargs["source_names"])
+        if len(kwargs["source_names"]) >= 100:
+            error = script_autosync.ServerError("503 Service Unavailable")
+            error.response = FakeHttpResponse(503)
+            raise error
+
+    archive = SimpleNamespace(copyPackages=flaky_copy_packages)
+    options = SimpleNamespace(
+        source=SimpleNamespace(archive=object(), series=SimpleNamespace(name="sid")),
+        target=SimpleNamespace(
+            archive=archive, series=SimpleNamespace(name="questing"), pocket="Proposed"
+        ),
+        requestor=object(),
+    )
+
+    script_autosync.copy_packages(options, ["pkg-%d" % i for i in range(100)])
+
+    assert len(calls[0]) == 100
+    assert len(calls[1]) == 50
+    assert len(calls[2]) == 50
